@@ -9,7 +9,30 @@ export async function scrapeSPA(url: string): Promise<ScrapeResult> {
         : await chromium.launch();
     const page = await browser.newPage()
 
-    await page.goto(url, { waitUntil: 'networkidle' })
+    // Intercept and block heavy media requests: images, videos, fonts
+    // This stops downloading the large files while leaving the <img>/<video> tags in the DOM untouched!
+    await page.route('**/*', route => {
+        const type = route.request().resourceType()
+        if (['image', 'media', 'font'].includes(type)) {
+            route.abort()
+        } else {
+            route.continue()
+        }
+    })
+
+    // Load the page
+    await page.goto(url, { waitUntil: 'domcontentloaded' })
+
+    // Wait for API requests to settle, but catch timeouts in case of websockets/long-polling
+    try {
+        await page.waitForLoadState('networkidle', { timeout: 15000 })
+    } catch (e) {
+        console.warn(`Network idle timed out for ${url}, continuing anyway...`)
+    }
+
+    // Give React/Vue an extra second to render the DOM after the fetch completes
+    await page.waitForTimeout(1500)
+
     const html = await page.content()
     await browser.close()
 
